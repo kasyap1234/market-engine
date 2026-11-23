@@ -22,3 +22,6 @@ services:
       - "shared_preload_libraries=timescaledb"
       - "-c"
       - "timescaledb.enable_chunk_skipping=on"
+
+volumes:
+  tsdb_data:
