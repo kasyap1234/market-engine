@@ -1,0 +1,23 @@
+services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg18
+    container_name: market_engine_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: marketdata
+      POSTGRES_USER: trader
+      POSTGRES_PASSWORD: localdevpassword
+    ports:
+      - "5432:5432"
+    volumes:
+      - tsdb_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_preload_libraries=timescaledb"
+      - "-c"
+      - "timescaledb.enable_chunk_skipping=on"
+
+volumes:
+  tsdb_data:

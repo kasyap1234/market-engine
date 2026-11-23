@@ -1,0 +1,143 @@
+version: '3'
+
+dotenv: ['.env']
+
+env:
+  GOOSE_DRIVER: postgres
+  GOOSE_MIGRATION_DIR: ./migrations
+  GOOSE_DBSTRING: '{{.DATABASE_URL | default "postgres://trader:localdevpassword@localhost:5432/marketdata?sslmode=disable"}}'
+
+vars:
+  BIN_DIR: ./bin
+  DB_CONTAINER: market_engine_db
+  DB_USER: '{{.POSTGRES_USER | default "trader"}}'
+  DB_NAME: '{{.POSTGRES_DB | default "marketdata"}}'
+
+tasks:
+  default:
+    desc: List all available tasks
+    silent: true
+    cmds:
+      - task --list
+
+  # ===========================================================================
+  # Database (TimescaleDB via Docker Compose)
+  # ===========================================================================
+  db:up:
+    desc: Start TimescaleDB container in the background
+    cmds:
+      - docker compose up -d
+
+  db:down:
+    desc: Stop TimescaleDB container
+    cmds:
+      - docker compose down
+
+  db:logs:
+    desc: Tail TimescaleDB container logs
+    cmds:
+      - docker compose logs -f timescaledb
+
+  db:psql:
+    desc: Open an interactive psql shell inside TimescaleDB
+    cmds:
+      - docker exec -it {{.DB_CONTAINER}} psql -U {{.DB_USER}} -d {{.DB_NAME}}
+
+  db:stats:
+    desc: Show TimescaleDB hypertable & compression statistics
+    cmds:
+      - |
+        docker exec -it {{.DB_CONTAINER}} psql -U {{.DB_USER}} -d {{.DB_NAME}} -c "
+          SELECT hypertable_name, num_chunks, compression_enabled
+          FROM timescaledb_information.hypertables;
+        "
+
+  # ===========================================================================
+  # Migrations (Goose)
+  # ===========================================================================
+  migrate:up:
+    desc: Apply all pending Goose migrations
+    cmds:
+      - goose up
+
+  migrate:down:
+    desc: Roll back the most recent Goose migration
+    cmds:
+      - goose down
+
+  migrate:status:
+    desc: Print current Goose migration status
+    cmds:
+      - goose status
+
+  migrate:create:
+    desc: Create a new SQL migration (usage - task migrate:create NAME=add_orders)
+    requires:
+      vars: [NAME]
+    cmds:
+      - goose create {{.NAME}} sql
+
+  migrate:reset:
+    desc: Roll back ALL migrations (destructive)
+    prompt: This will roll back ALL migrations and drop all tables. Continue?
+    cmds:
+      - goose reset
+
+  # ===========================================================================
+  # Go Development & Binaries
+  # ===========================================================================
+  setup:
+    desc: Start database and apply all migrations
+    cmds:
+      - task: db:up
+      - sleep 2
+      - task: migrate:up
+
+  proto:
+    desc: Compile Upstox V3 .proto files into Go structs
+    cmds:
+      - protoc --go_out=. --go_opt=paths=source_relative proto/*.proto
+
+  build:
+    desc: Build all Go binaries into ./bin
+    cmds:
+      - mkdir -p {{.BIN_DIR}}
+      - go build -o {{.BIN_DIR}}/sync-instruments ./cmd/sync-instruments
+      - go build -o {{.BIN_DIR}}/collector ./cmd/collector
+      - go build -o {{.BIN_DIR}}/backfill ./cmd/backfill
+
+  run:sync:
+    desc: Sync active instruments from Delta Exchange and Upstox
+    cmds:
+      - go run ./cmd/sync-instruments
+
+  run:collector:
+    desc: Run the 24/7 WebSocket market data collector
+    cmds:
+      - go run ./cmd/collector
+
+  run:backfill:
+    desc: Run historical REST backfill (pass flags after --)
+    cmds:
+      - go run ./cmd/backfill {{.CLI_ARGS}}
+
+  test:
+    desc: Run all Go tests with race detector
+    cmds:
+      - go test -race -v ./...
+
+  vet:
+    desc: Run go vet across the repo
+    cmds:
+      - go vet ./...
+
+  tidy:
+    desc: Tidy and verify Go module dependencies
+    cmds:
+      - go mod tidy
+      - go mod verify
+
+  clean:
+    desc: Remove compiled binaries
+    cmds:
+      - rm -rf {{.BIN_DIR}}
